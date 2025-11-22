@@ -1,15 +1,12 @@
-# FIXED VERSION – ONLY BD ALLOWED
+# FIXED FULL SYSTEM – ONLY BD ALLOWED
 # by ChatGPT
 
 from flask import Flask, request, jsonify
 import asyncio
-import json, random
-import requests
-import aiohttp
+import json, requests, aiohttp, binascii
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-from google.protobuf.json_format import MessageToJson, MessageToDict
-import binascii
+from google.protobuf.json_format import MessageToDict, MessageToJson
 
 import like_pb2
 import like_count_pb2
@@ -17,74 +14,69 @@ import uid_generator_pb2
 
 app = Flask(__name__)
 
-# ==============================
-#  ONLY BD SERVER ALLOWED
-# ==============================
+# -------------------------------------
+# SERVER SETTINGS (ONLY BD ALLOWED)
+# -------------------------------------
 ALLOWED_SERVER = "BD"
 
-# ==============================
-# TOKEN LOADER (BD ONLY)
-# ==============================
+# -------------------------------------
+# LOAD TOKENS (BD ONLY)
+# -------------------------------------
 def load_bd_tokens():
     try:
         with open("token_bd.json", "r") as f:
-            tokens = json.load(f)
-        if not tokens:
+            data = json.load(f)
+        if not data:
             return None
-        return tokens
+        return data
     except:
         return None
 
-
-# ==============================
+# -------------------------------------
 # ENCRYPT FUNCTION
-# ==============================
-def encrypt_message(data):
+# -------------------------------------
+def encrypt(data):
     key = b'Yg&tc%DEuh6%Zc^8'
     iv  = b'6oyZDr22E3ychjM%'
     cipher = AES.new(key, AES.MODE_CBC, iv)
     padded = pad(data, AES.block_size)
-    encrypted = cipher.encrypt(padded)
-    return binascii.hexlify(encrypted).decode()
+    enc = cipher.encrypt(padded)
+    return binascii.hexlify(enc).decode()
 
-
-# ==============================
-# CREATE LIKE PROTOBUF
-# ==============================
+# -------------------------------------
+# PROTOBUF FOR LIKE
+# -------------------------------------
 def create_like_proto(uid):
     msg = like_pb2.like()
     msg.uid = int(uid)
     msg.region = "BD"
     return msg.SerializeToString()
 
-
-# ==============================
-# UID GENERATOR PROTOBUF
-# ==============================
+# -------------------------------------
+# PROTOBUF FOR PROFILE FETCH
+# -------------------------------------
 def create_uid_proto(uid):
     msg = uid_generator_pb2.uid_generator()
     msg.krishna_ = int(uid)
     msg.teamXdarks = 1
     return msg.SerializeToString()
 
+# -------------------------------------
+# FETCH PROFILE (BEFORE/AFTER)
+# -------------------------------------
+def fetch_profile(uid, token):
+    enc_uid = encrypt(create_uid_proto(uid))
 
-# ==============================
-# GET PLAYER INFO (Before / After)
-# ==============================
-def get_player_info(uid, token):
-    encrypted_uid = encrypt_message(create_uid_proto(uid))
     url = "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
-
-    edata = bytes.fromhex(encrypted_uid)
+    edata = bytes.fromhex(enc_uid)
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "FF-API",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
 
-    resp = requests.post(url, data=edata, headers=headers, verify=False)
-    binary = resp.content
+    r = requests.post(url, data=edata, headers=headers, verify=False)
+    binary = r.content
 
     try:
         obj = like_count_pb2.Info()
@@ -93,49 +85,47 @@ def get_player_info(uid, token):
     except:
         return None
 
-
-# ==============================
-# SEND LIKE REQUEST
-# ==============================
-async def send_like_request(encrypted_uid, token):
+# -------------------------------------
+# SEND SINGLE LIKE
+# -------------------------------------
+async def send_like(enc_uid, token):
     url = "https://clientbp.ggblueshark.com/LikeProfile"
-    edata = bytes.fromhex(encrypted_uid)
+    edata = bytes.fromhex(enc_uid)
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "FF-API"
+        "Content-Type": "application/x-www-form-urlencoded"
     }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, data=edata, headers=headers) as r:
             return r.status
 
+# -------------------------------------
+# SEND 100 LIKES
+# -------------------------------------
+async def send_100(uid, tokens):
+    enc_uid = encrypt(create_like_proto(uid))
 
-async def send_multiple(uid, tokens):
-    encrypted_uid = encrypt_message(create_like_proto(uid))
-    
     tasks = []
     for i in range(100):
         token = tokens[i % len(tokens)]["token"]
-        tasks.append(send_like_request(encrypted_uid, token))
+        tasks.append(send_like(enc_uid, token))
 
     return await asyncio.gather(*tasks)
 
-
-# ==============================
-# MAIN API ROUTE
-# ==============================
+# -------------------------------------
+# MAIN API
+# -------------------------------------
 @app.route("/like")
 def like_api():
     uid = request.args.get("uid")
-    server = request.args.get("server_name", "").upper()
+    srv = request.args.get("server_name", "").upper()
 
-    if not uid or not server:
-        return jsonify({"error": "UID and server_name are required"}), 400
+    if not uid or not srv:
+        return jsonify({"error": "UID and server_name required"}), 400
 
-    # ----- ONLY BD ALLOWED -----
-    if server != ALLOWED_SERVER:
+    if srv != ALLOWED_SERVER:
         return jsonify({"error": "Only BD server allowed"}), 403
 
     tokens = load_bd_tokens()
@@ -145,45 +135,43 @@ def like_api():
     token = tokens[0]["token"]
 
     # BEFORE LIKE
-    before = get_player_info(uid, token)
+    before = fetch_profile(uid, token)
     if not before:
         return jsonify({"error": "Failed to fetch before-like info"}), 500
 
-    before_likes = int(before["AccountInfo"].get("Likes", 0))
+    before_like = int(before["AccountInfo"].get("Likes", 0))
 
-    # SEND 100 LIKE REQUESTS
+    # SEND LIKES
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(send_multiple(uid, tokens))
+        loop.run_until_complete(send_100(uid, tokens))
     except:
-        return jsonify({"error": "Async error"}), 500
+        return jsonify({"error": "Async system error"}), 500
 
     # AFTER LIKE
-    after = get_player_info(uid, token)
+    after = fetch_profile(uid, token)
     if not after:
         return jsonify({"error": "Failed to fetch after-like info"}), 500
 
-    after_likes = int(after["AccountInfo"].get("Likes", 0))
-    name = after["AccountInfo"].get("PlayerNickname", "Unknown")
-    uid_val = after["AccountInfo"].get("UID", uid)
+    after_like = int(after["AccountInfo"]["Likes"])
+    name       = after["AccountInfo"].get("PlayerNickname", "Unknown")
+    uid_final  = after["AccountInfo"].get("UID", uid)
 
-    given = after_likes - before_likes
+    given = after_like - before_like
 
-    result = {
+    return jsonify({
         "LikesGivenByAPI": given,
-        "LikesafterCommand": after_likes,
-        "LikesbeforeCommand": before_likes,
+        "LikesafterCommand": after_like,
+        "LikesbeforeCommand": before_like,
         "PlayerNickname": name,
-        "UID": uid_val,
+        "UID": uid_final,
         "status": 1 if given > 0 else 2
-    }
-
-    return jsonify(result)
+    })
 
 
-# ==============================
-# RUN (LOCAL)
-# ==============================
+# -------------------------------------
+# LOCAL RUN
+# -------------------------------------
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
